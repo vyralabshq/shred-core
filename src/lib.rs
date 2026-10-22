@@ -10,10 +10,13 @@
 //!    leaders reads the leader schedule and checks the leader's signature on that root.
 //! 5. block joins data shards into batches and decodes them into entries or block markers.
 //!    footer reads the block footer marker, its bank hash, clock, client and certificates.
+//! 6. assembler runs all of the above on a live or recorded stream, in the right order, with timing.
 //!
-//! pcap and footer are cargo features, both on by default.
+//! assembler, pcap and footer are cargo features, all on by default.
 //!
 //! error holds the one Error type every module returns.
+#[cfg(feature = "assembler")]
+pub mod assembler;
 pub mod block;
 pub mod error;
 pub mod fec;

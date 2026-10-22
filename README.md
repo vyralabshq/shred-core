@@ -17,6 +17,7 @@ In the order a shred goes through them.
 3. `shred` checks a packet once and works out its kind, its place in the FEC set and its byte layout.
 4. `fec` collects the shreds of one FEC set and rebuilds missing data shards with Reed-Solomon. `merkle` checks each shred's proof against the set's root, and `leaders` checks the leader's signature on that root.
 5. `block` joins data shards into batches and decodes them into entries or block markers. `footer` reads the block footer: bank hash, clock, client and the finalization certificates.
+6. `assembler` runs all of the above on a stream of packets: it drops duplicates, checks every shred, decodes sets in order and closes each slot at its Alpenglow skip deadline. Out come transactions by signature, block markers, FEC sets and closed slots, each with its arrival times.
 
 `error` holds the one `Error` type every module returns.
 
@@ -29,8 +30,9 @@ shred-core = { git = "https://github.com/vyralabshq/shred-core", tag = "v0.1.0" 
 
 ### Features
 
-Both on by default. Turn them off with `default-features = false` and pick the ones you need.
+All on by default. Turn them off with `default-features = false` and pick the ones you need.
 
+- `assembler`, the slot assembler. It needs `footer`.
 - `pcap`, the capture file reader.
 - `footer`, the Alpenglow block footer decoder. It brings in serde.
 

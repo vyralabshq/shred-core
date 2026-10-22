@@ -16,7 +16,9 @@ thiserror = "2.0.21"
 wincode = "0.6.2"
 
 [features]
-default = ["footer", "pcap"]
+default = ["assembler", "footer", "pcap"]
+# the slot assembler, shreds in, transactions, markers and closed slots out
+assembler = ["footer"]
 # the Alpenglow block footer decoder, its signer bitmaps serialize with serde
 footer = ["dep:serde"]
 # the pcap capture file reader
