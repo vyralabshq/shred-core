@@ -1,1 +1,4 @@
 /target
+# real captures hold peer IP addresses, only trimmed fixtures are committed
+*.pcap
+*.pcapng
