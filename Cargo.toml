@@ -6,7 +6,7 @@ license = "Apache-2.0"
 
 [dependencies]
 reed-solomon-erasure = "6.0.0"
-serde = { version = "1.0.229", features = ["serde_derive"] }
+serde = { version = "1.0.229", features = ["serde_derive"], optional = true }
 sha2 = "0.10.9"
 solana-address = { version = "2.9.0", default-features = false, features = ["decode"] }
 solana-hash = { version = "4.7.0", features = ["wincode"] }
@@ -14,3 +14,10 @@ solana-signature = { version = "3.6.0", features = ["verify"] }
 solana-transaction = { version = "5.1.0", features = ["wincode"] }
 thiserror = "2.0.21"
 wincode = "0.6.2"
+
+[features]
+default = ["footer", "pcap"]
+# the Alpenglow block footer decoder, its signer bitmaps serialize with serde
+footer = ["dep:serde"]
+# the pcap capture file reader
+pcap = []

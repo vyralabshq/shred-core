@@ -6,6 +6,8 @@ shred-core parses Merkle shreds, puts FEC sets back together, rebuilds missing d
 
 Tested on Solana testnet captures: blocks rebuilt from shreds match the same blocks fetched with getBlock, transaction for transaction.
 
+It runs live in [shredtap](https://github.com/jkrishnad/shred-tap), which decodes the shreds reaching a testnet validator and shows them at [shreds.vyralabs.fun](https://shreds.vyralabs.fun).
+
 ## Modules
 
 In the order a shred goes through them.
@@ -24,6 +26,13 @@ In the order a shred goes through them.
 [dependencies]
 shred-core = { git = "https://github.com/vyralabshq/shred-core", tag = "v0.1.0" }
 ```
+
+### Features
+
+Both on by default. Turn them off with `default-features = false` and pick the ones you need.
+
+- `pcap`, the capture file reader.
+- `footer`, the Alpenglow block footer decoder. It brings in serde.
 
 Rebuild every FEC set in a capture:
 
@@ -64,6 +73,10 @@ sudo timeout 60 tcpdump -i <interface> -nn -s 1300 --time-stamp-precision=nano -
 ```
 
 A capture holds your peers' IP addresses, so keep it private.
+
+### Leader schedule
+
+`LeaderSchedule::read` takes the text that `solana leader-schedule` prints. For any other source, like RPC `getLeaderSchedule`, set each slot with `insert(slot, pubkey)`.
 
 ## Tests
 

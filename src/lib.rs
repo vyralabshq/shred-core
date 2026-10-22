@@ -11,13 +11,17 @@
 //! 5. block joins data shards into batches and decodes them into entries or block markers.
 //!    footer reads the block footer marker, its bank hash, clock, client and certificates.
 //!
+//! pcap and footer are cargo features, both on by default.
+//!
 //! error holds the one Error type every module returns.
 pub mod block;
 pub mod error;
 pub mod fec;
+#[cfg(feature = "footer")]
 pub mod footer;
 pub mod leaders;
 pub mod merkle;
+#[cfg(feature = "pcap")]
 pub mod pcap;
 pub mod shred;
 pub mod wire;

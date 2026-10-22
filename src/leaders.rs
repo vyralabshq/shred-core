@@ -3,7 +3,7 @@
 //! The leader signs the Merkle root of every FEC set it makes, once, and every shred of
 //! the set carries that signature in its first 64 bytes. Checking it against the slot
 //! leader's public key proves the whole set came from the leader, as Agave's sigverify does.
-//! The schedule is read from the text that solana leader-schedule prints,
+//! The schedule is read from the text that solana leader-schedule prints, or filled slot by slot with insert,
 //! one slot and one base58 public key per line. Any other line is skipped.
 //! A LeaderDir is a folder of such files, one per epoch, that a live run reads again
 //! whenever a file in it is added, replaced or removed, so a new epoch needs no restart.
@@ -47,6 +47,11 @@ impl LeaderSchedule {
             self.leaders.insert(slot, key.to_bytes());
         }
         Ok(())
+    }
+
+    /// Sets the leader of one slot, for a schedule from any other source, like RPC getLeaderSchedule.
+    pub fn insert(&mut self, slot: u64, leader: Pubkey) {
+        self.leaders.insert(slot, leader);
     }
 
     /// The leader of a slot, None if the schedule doesn't cover it.
@@ -145,6 +150,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.len(), 58);
+        // a slot set by hand, from any other source
+        s.insert(7, leader.to_bytes());
+        assert_eq!(s.leader(7), Some(&leader.to_bytes()));
+        assert_eq!(s.len(), 59);
     }
 
     #[test]
