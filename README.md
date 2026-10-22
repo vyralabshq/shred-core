@@ -25,7 +25,7 @@ In the order a shred goes through them.
 
 ```toml
 [dependencies]
-shred-core = { git = "https://github.com/vyralabshq/shred-core", tag = "v0.1.0" }
+shred-core = { git = "https://github.com/vyralabshq/shred-core", tag = "v0.2.0" }
 ```
 
 ### Features
@@ -36,45 +36,49 @@ All on by default. Turn them off with `default-features = false` and pick the on
 - `pcap`, the capture file reader.
 - `footer`, the Alpenglow block footer decoder. It brings in serde.
 
-Rebuild every FEC set in a capture:
+### Read every transaction in a capture
 
 ```rust
-use std::collections::HashMap;
 use std::fs::File;
+use std::io::BufReader;
 
-use shred_core::fec::FecSet;
+use shred_core::assembler::{Assembler, Event};
+use shred_core::leaders::LeaderSchedule;
 use shred_core::pcap::{PacketSource, PcapReader, udp_payload};
-use shred_core::shred::Shred;
 
 fn main() -> shred_core::error::Result<()> {
-    let mut source = PcapReader::new(File::open("shreds.pcap")?)?;
-    let mut sets: HashMap<(u64, u32), FecSet> = HashMap::new();
+    let mut leaders = LeaderSchedule::default();
+    leaders.read(BufReader::new(File::open("leaders.txt")?))?;
+    let mut assembler = Assembler::new().with_leaders(leaders);
 
+    let mut source = PcapReader::new(BufReader::new(File::open("shreds.pcap")?))?;
     while let Some(record) = source.next_record()? {
         let Some(payload) = udp_payload(&record.frame) else { continue };
-        let Ok(shred) = Shred::parse(payload, record.recv_ns) else { continue };
-        let (slot, fec_set_index) = shred.fec_key();
-        let set = sets.entry((slot, fec_set_index)).or_insert_with(|| FecSet::new(slot, fec_set_index));
-        // a shred whose Merkle proof doesn't lead to the set's root is refused
-        let _ = set.push(shred);
+        assembler.push(payload, record.recv_ns).into_iter().for_each(print);
     }
-
-    for set in sets.values_mut().filter(|set| set.can_recover()) {
-        set.recover()?;
-        println!("slot {} set {} rebuilt: {}", set.slot, set.fec_set_index, set.recovered);
-    }
+    // the input ended, close the slots still open
+    assembler.finish().into_iter().for_each(print);
     Ok(())
+}
+
+fn print(event: Event) {
+    match event {
+        Event::Tx { slot, signature, rebuilt, .. } => println!("{slot} {signature} rebuilt {rebuilt}"),
+        Event::Slot { slot, txs, end, .. } => println!("slot {slot} {} with {txs} txs", end.as_str()),
+        _ => {}
+    }
 }
 ```
 
-Capture the shreds on a node with nanosecond timestamps, for example:
+On a 10 second testnet capture this prints 2,394 transactions in 45 complete slots, the same as getBlock.
 
-```sh
-sudo timeout 60 tcpdump -i <interface> -nn -s 1300 --time-stamp-precision=nano -w shreds.pcap \
-  'udp and dst host <node ip> and (udp[4:2] = 1211 or udp[4:2] = 1236)'
-```
+Any other source of shreds works the same way: a UDP socket, a relay or a replay. Hand each UDP payload to `push` with the time it arrived in nanoseconds. The assembler keeps no clock of its own, so a replay gives the same result every time. A slot's events come out when it closes, at its Alpenglow skip deadline, 1.45 s after its first shred with 200 ms slots, so shreds that arrive late still count.
 
-A capture holds your peers' IP addresses, so keep it private.
+For a full program built on it, live capture, rollups and a NATS feed, see [shredtap](https://github.com/jkrishnad/shred-tap).
+
+### Where shreds come from
+
+Anywhere you receive them: a shred feed or relay sent to a UDP port you own, your own node, or a pcap file recorded from either. shred-core only needs the UDP payload and when it arrived. A pcap file holds the sender's IP addresses, so keep it private.
 
 ### Leader schedule
 
