@@ -6,5 +6,6 @@ license = "Apache-2.0"
 
 [dependencies]
 reed-solomon-erasure = "6.0.0"
+sha2 = "0.10.9"
 thiserror = "2.0.21"
 wincode = "0.6.2"
