@@ -7,5 +7,7 @@ license = "Apache-2.0"
 [dependencies]
 reed-solomon-erasure = "6.0.0"
 sha2 = "0.10.9"
+solana-address = { version = "2.9.0", default-features = false, features = ["decode"] }
+solana-signature = { version = "3.6.0", features = ["verify"] }
 thiserror = "2.0.21"
 wincode = "0.6.2"
