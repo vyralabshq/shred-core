@@ -4,5 +4,6 @@ pub mod fec;
 pub mod footer;
 pub mod leaders;
 pub mod merkle;
+pub mod pcap;
 pub mod shred;
 pub mod wire;
