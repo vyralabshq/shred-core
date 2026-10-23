@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.0
+
+- `Assembler::emit_early`, off by default: transactions and markers come out the moment their batch decodes instead of when the slot closes. Their rebuilt flag then means a data shred had not arrived yet at decode.
+- `Event::Tx` carries the whole `VersionedTransaction`, its entry index in the slot and its position in the entry. A breaking change for code that names every field.
+
 ## v0.2.0
 
 - `assembler`, moved from shredtap: shreds in, transactions by signature, block markers, FEC sets and closed slots out.

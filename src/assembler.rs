@@ -8,6 +8,9 @@
 //! has passed on the capture clock, 1.45 s after its first shred with 200 ms slots.
 //! Data shreds keep arriving after a slot ends, and the slot's events are held until it closes,
 //! so they can say which data shreds never arrived and only exist because Reed-Solomon rebuilt them.
+//! With emit_early, transactions and markers are handed out the moment their batch decodes instead,
+//! and their rebuilt flag says which data shreds had not arrived yet at that moment.
+//! Set and Slot events still come when the slot closes, with the final count.
 //! Every event carries t0 (first shred of the set), t1 (32nd shred) and t2 (the batch could decode).
 
 use crate::block::{Batcher, Component, decode_component, is_last_in_slot};
@@ -19,6 +22,7 @@ use crate::merkle::shred_root;
 use crate::shred::{Kind, Shred};
 use crate::wire;
 use solana_transaction::Signature;
+use solana_transaction::versioned::VersionedTransaction;
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 
@@ -63,8 +67,14 @@ pub enum Event {
     Tx {
         slot: u64,
         signature: Signature,
+        transaction: VersionedTransaction,
+        /// Index of its entry in the slot, ticks included.
+        entry: u32,
+        /// Its place among the entry's transactions.
+        position: u32,
         timing: Timing,
         /// Its batch holds a data shred that never arrived, so part of it was only rebuilt.
+        /// With emit_early: a data shred that had not arrived yet when the batch decoded.
         rebuilt: bool,
     },
     /// A block marker, variant 0 footer, 1 header, 2 update parent, 3 genesis certificate.
@@ -76,7 +86,8 @@ pub enum Event {
         /// Its batch holds a data shred that never arrived, so part of it was only rebuilt.
         rebuilt: bool,
     },
-    /// One FEC set, either decoded or given up on. Comes before anything decoded from it.
+    /// One FEC set, either decoded or given up on. Comes before anything decoded from it,
+    /// or with emit_early, when its slot closes.
     Set {
         slot: u64,
         fec_set_index: u32,
@@ -201,6 +212,8 @@ struct SlotState {
     /// Sets that failed to rebuild, the ones still waiting are added when the slot closes.
     sets_lost: u32,
     txs: u64,
+    /// Entries decoded so far, ticks included, so each transaction knows its entry's index.
+    entries: u32,
     /// Data shreds whose first copy came after their set was decoded.
     late_data: u32,
     footer: Option<Footer>,
@@ -229,6 +242,8 @@ pub struct Assembler {
     give_up_ns: u64,
     /// Who led each slot. Without it signatures are not checked.
     leaders: Option<LeaderSchedule>,
+    /// Hand out transactions and markers when their batch decodes, not when the slot closes.
+    emit_early: bool,
     stats: Stats,
 }
 
@@ -253,6 +268,7 @@ impl Assembler {
             tip: 0,
             give_up_ns: DELTA_TIMEOUT_NS + LEADER_WINDOW_SLOTS * slot_ns + DELTA_NS,
             leaders: None,
+            emit_early: false,
             stats: Stats::default(),
         }
     }
@@ -260,6 +276,13 @@ impl Assembler {
     /// Checks every FEC set's signature against its slot's leader from this schedule.
     pub fn with_leaders(mut self, leaders: LeaderSchedule) -> Self {
         self.leaders = Some(leaders);
+        self
+    }
+
+    /// Hands out each transaction and marker the moment its batch decodes, tens of milliseconds
+    /// after the first shred, instead of holding it until the slot closes.
+    pub fn emit_early(mut self) -> Self {
+        self.emit_early = true;
         self
     }
 
@@ -307,6 +330,7 @@ impl Assembler {
             sets_decoded: 0,
             sets_lost: 0,
             txs: 0,
+            entries: 0,
             late_data: 0,
             footer: None,
             done_ns: None,
@@ -372,18 +396,21 @@ impl Assembler {
         }
         seen.shreds |= bit;
 
-        self.drain(slot, recv_ns);
+        let mut events = events;
+        events.extend(self.drain(slot, recv_ns));
         events
     }
 
     /// Hands every rebuildable set, in order, to the slot's batcher and decodes finished batches.
-    /// What it decodes is held in the slot until the slot closes.
-    fn drain(&mut self, slot: u64, now_ns: u64) {
+    /// What it decodes is held in the slot until the slot closes, or with emit_early,
+    /// transactions and markers are returned right away.
+    fn drain(&mut self, slot: u64, now_ns: u64) -> Vec<Event> {
         let mut slot_done = false;
         let mut end = SlotEnd::GivenUp;
+        let mut early = Vec::new();
 
         let Some(state) = self.slots.get_mut(&slot) else {
-            return;
+            return early;
         };
 
         while let Some(set) = state.sets.get_mut(&state.next_set) {
@@ -444,8 +471,15 @@ impl Assembler {
                 match decode_component(&batch) {
                     Ok(component) => {
                         let mut decoded = Vec::new();
-                        push_events(&mut decoded, &mut self.stats, slot, component, timing);
-                        for event in decoded {
+                        push_events(
+                            &mut decoded,
+                            &mut self.stats,
+                            slot,
+                            component,
+                            timing,
+                            &mut state.entries,
+                        );
+                        for mut event in decoded {
                             match &event {
                                 Event::Tx { .. } => state.txs += 1,
                                 Event::Marker {
@@ -456,7 +490,28 @@ impl Assembler {
                                 },
                                 _ => {}
                             }
-                            state.pending.push((event, start..i + 1));
+                            if self.emit_early {
+                                // only what has arrived so far is known, the rest was rebuilt
+                                let seen = &state.seen;
+                                let arrived = |index: u32| {
+                                    let place = index % DATA_SHREDS as u32;
+                                    seen.get(&(index - place))
+                                        .is_some_and(|s| s.shreds & 1 << place != 0)
+                                };
+                                match &mut event {
+                                    Event::Tx { rebuilt, .. } => {
+                                        *rebuilt = !(start..i + 1).all(arrived);
+                                        self.stats.txs_rebuilt += u64::from(*rebuilt);
+                                    }
+                                    Event::Marker { rebuilt, .. } => {
+                                        *rebuilt = !(start..i + 1).all(arrived)
+                                    }
+                                    _ => {}
+                                }
+                                early.push(event);
+                            } else {
+                                state.pending.push((event, start..i + 1));
+                            }
                         }
                         state.done_ns = Some(now_ns);
                     }
@@ -476,6 +531,7 @@ impl Assembler {
         if slot_done {
             state.ended = Some(end);
         }
+        early
     }
 
     /// Closes every slot whose deadline has passed on the capture clock, giving up on the ones still open.
@@ -651,16 +707,22 @@ fn push_events(
     slot: u64,
     component: Component,
     timing: Timing,
+    entries_seen: &mut u32,
 ) {
     match component {
         Component::Entries(entries) => {
             for entry in entries {
-                for tx in entry.transactions {
-                    if let Some(signature) = tx.signatures.first() {
+                let entry_index = *entries_seen;
+                *entries_seen += 1;
+                for (position, transaction) in (0..).zip(entry.transactions) {
+                    if let Some(signature) = transaction.signatures.first().copied() {
                         stats.txs += 1;
                         events.push(Event::Tx {
                             slot,
-                            signature: *signature,
+                            signature,
+                            transaction,
+                            entry: entry_index,
+                            position,
                             timing,
                             rebuilt: false,
                         });
@@ -766,6 +828,43 @@ mod tests {
         assert_eq!(s.slots_complete, 1);
         assert_eq!(s.batches, 4);
         assert_eq!(s.decode_errors, 0);
+    }
+
+    #[test]
+    fn test_emit_early() {
+        let packets = arrivals();
+        let (_, held) = run_to_end(&packets);
+
+        let mut asm = Assembler::new().emit_early();
+        let mut early = Vec::new();
+        for (recv_ns, payload) in &packets {
+            early.extend(asm.push(payload, *recv_ns));
+        }
+        // every transaction is out before the slot closes, in the same order
+        assert_eq!(signatures(&early), signatures(&held));
+        assert!(!early.iter().any(|e| matches!(e, Event::Slot { .. })));
+
+        // each transaction knows its entry and its place in it, and carries itself
+        let mut last = (0, 0);
+        for e in &early {
+            if let Event::Tx {
+                signature,
+                transaction,
+                entry,
+                position,
+                ..
+            } = e
+            {
+                assert_eq!(transaction.signatures[0], *signature);
+                assert!((*entry, *position) > last || last == (0, 0));
+                last = (*entry, *position);
+            }
+        }
+        let slot_events = asm.finish();
+        assert!(matches!(
+            slot_events.last(),
+            Some(Event::Slot { txs: 26, .. })
+        ));
     }
 
     #[test]
