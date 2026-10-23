@@ -17,7 +17,7 @@ In the order a shred goes through them.
 3. `shred` checks a packet once and works out its kind, its place in the FEC set and its byte layout.
 4. `fec` collects the shreds of one FEC set and rebuilds missing data shards with Reed-Solomon. `merkle` checks each shred's proof against the set's root, and `leaders` checks the leader's signature on that root.
 5. `block` joins data shards into batches and decodes them into entries or block markers. `footer` reads the block footer: bank hash, clock, client and the finalization certificates.
-6. `assembler` runs all of the above on a stream of packets: it drops duplicates, checks every shred, decodes sets in order and closes each slot at its Alpenglow skip deadline. Out come transactions by signature, block markers, FEC sets and closed slots, each with its arrival times.
+6. `assembler` runs all of the above on a stream of packets: it drops duplicates, checks every shred, decodes sets in order and closes each slot at its Alpenglow skip deadline. Out come transactions, block markers, FEC sets and closed slots, each with its arrival times.
 
 `error` holds the one `Error` type every module returns.
 
@@ -25,7 +25,7 @@ In the order a shred goes through them.
 
 ```toml
 [dependencies]
-shred-core = { git = "https://github.com/vyralabshq/shred-core", tag = "v0.2.0" }
+shred-core = { git = "https://github.com/vyralabshq/shred-core", tag = "v0.3.0" }
 ```
 
 ### Features
@@ -73,6 +73,10 @@ fn print(event: Event) {
 On a 10 second testnet capture this prints 2,394 transactions in 45 complete slots, the same as getBlock.
 
 Any other source of shreds works the same way: a UDP socket, a relay or a replay. Hand each UDP payload to `push` with the time it arrived in nanoseconds. The assembler keeps no clock of its own, so a replay gives the same result every time. A slot's events come out when it closes, at its Alpenglow skip deadline, 1.45 s after its first shred with 200 ms slots, so shreds that arrive late still count.
+
+To get transactions sooner, build it with `Assembler::new().emit_early()`. Each transaction and block marker then comes out as soon as its batch decodes, and the slot still closes at its deadline. A transaction is then marked rebuilt when one of its data shreds had not arrived yet at decode.
+
+Every `Event::Tx` carries the full `VersionedTransaction`, its signature, the index of its entry in the slot and its place among that entry's transactions.
 
 For a full program built on it, live capture, rollups and a NATS feed, see [shredtap](https://github.com/jkrishnad/shred-tap).
 
