@@ -1,10 +1,11 @@
 [package]
 name = "shred-core"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 license = "Apache-2.0"
 
 [dependencies]
+pcap = { version = "2.5.0", optional = true }
 reed-solomon-erasure = "6.0.0"
 serde = { version = "1.0.229", features = ["serde_derive"], optional = true }
 sha2 = "0.10.9"
@@ -23,3 +24,5 @@ assembler = ["footer"]
 footer = ["dep:serde"]
 # the pcap capture file reader
 pcap = []
+# live capture from a network interface, needs libpcap to build
+live = ["pcap", "dep:pcap"]

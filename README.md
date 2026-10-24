@@ -25,16 +25,17 @@ In the order a shred goes through them.
 
 ```toml
 [dependencies]
-shred-core = { git = "https://github.com/vyralabshq/shred-core", tag = "v0.3.0" }
+shred-core = { git = "https://github.com/vyralabshq/shred-core", tag = "v0.4.0" }
 ```
 
 ### Features
 
-All on by default. Turn them off with `default-features = false` and pick the ones you need.
+`assembler`, `pcap` and `footer` are on by default. Turn them off with `default-features = false` and pick the ones you need.
 
 - `assembler`, the slot assembler. It needs `footer`.
 - `pcap`, the capture file reader.
 - `footer`, the Alpenglow block footer decoder. It brings in serde.
+- `live`, off by default, reads shreds straight from a network interface with libpcap. It needs libpcap to build, and root or the `cap_net_raw` and `cap_net_admin` capabilities to run.
 
 ### Read every transaction in a capture
 
