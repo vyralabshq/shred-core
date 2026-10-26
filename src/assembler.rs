@@ -68,6 +68,8 @@ pub enum Event {
         slot: u64,
         signature: Signature,
         transaction: VersionedTransaction,
+        /// The transaction exactly as the leader encoded it, to send on without encoding it again.
+        raw: Vec<u8>,
         /// Index of its entry in the slot, ticks included.
         entry: u32,
         /// Its place among the entry's transactions.
@@ -714,13 +716,15 @@ fn push_events(
             for entry in entries {
                 let entry_index = *entries_seen;
                 *entries_seen += 1;
-                for (position, transaction) in (0..).zip(entry.transactions) {
+                let txs = entry.transactions.into_iter().zip(entry.raw);
+                for (position, (transaction, raw)) in (0..).zip(txs) {
                     if let Some(signature) = transaction.signatures.first().copied() {
                         stats.txs += 1;
                         events.push(Event::Tx {
                             slot,
                             signature,
                             transaction,
+                            raw,
                             entry: entry_index,
                             position,
                             timing,

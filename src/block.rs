@@ -5,13 +5,13 @@
 //! Batcher joins payloads in index order and hands over a batch when a shard ends one.
 //! decode_component reads the batch, an entry count above 0 means entries with transactions,
 //! 0 means a block marker such as the header or the footer.
+//! Each transaction keeps its own bytes as the leader encoded them, so it can be sent on as is.
 //! Data shards start at packet byte 64, so packet offsets are shifted by 64 in here.
 
 use crate::error::{Error, Result};
 use crate::wire;
 use solana_hash::Hash;
 use solana_transaction::versioned::VersionedTransaction;
-use wincode::SchemaRead;
 
 /// A data shard starts at packet byte 64 (right after the signature), so packet offsets shift by 64.
 const SHARD_START: usize = wire::SIGNATURE.end;
@@ -98,9 +98,7 @@ pub fn decode_component(batch: &[u8]) -> Result<Component> {
     })?;
 
     if count != [0u8; ENTRY_COUNT_SIZE] {
-        // the count is the Vec's own length prefix, so wincode reads it with the entries
-        let entries = wincode::deserialize::<Vec<Entry>>(batch)?;
-        return Ok(Component::Entries(entries));
+        return Ok(Component::Entries(decode_entries(batch)?));
     }
 
     let header = batch
@@ -126,6 +124,39 @@ pub fn decode_component(batch: &[u8]) -> Result<Component> {
     })
 }
 
+/// Reads the entries one field at a time, so each transaction's own bytes can be kept.
+/// The bytes a transaction took up are the ones the reader moved past while reading it.
+fn decode_entries(batch: &[u8]) -> Result<Vec<Entry>> {
+    let mut rest = batch;
+    let count: u64 = wincode::deserialize_from(&mut rest)?;
+
+    // no capacity up front, a bad count runs out of bytes instead of allocating
+    let mut entries = Vec::new();
+    for _ in 0..count {
+        let num_hashes: u64 = wincode::deserialize_from(&mut rest)?;
+        let hash: Hash = wincode::deserialize_from(&mut rest)?;
+        let txs: u64 = wincode::deserialize_from(&mut rest)?;
+
+        let mut transactions = Vec::new();
+        let mut raw = Vec::new();
+
+        for _ in 0..txs {
+            let before = rest;
+            let transaction: VersionedTransaction = wincode::deserialize_from(&mut rest)?;
+            transactions.push(transaction);
+            raw.push(before[..before.len() - rest.len()].to_vec());
+        }
+
+        entries.push(Entry {
+            num_hashes,
+            hash,
+            transactions,
+            raw,
+        });
+    }
+    Ok(entries)
+}
+
 /// What one batch decodes to.
 #[derive(Debug)]
 pub enum Component {
@@ -139,12 +170,14 @@ pub enum Component {
 }
 
 /// One PoH entry, same wire layout as Agave's solana-entry Entry.
-#[derive(Debug, SchemaRead)]
+#[derive(Debug)]
 pub struct Entry {
     pub num_hashes: u64,
     pub hash: Hash,
     /// Empty for a tick entry.
     pub transactions: Vec<VersionedTransaction>,
+    /// Each transaction's bytes exactly as the leader encoded them, in the same order.
+    pub raw: Vec<Vec<u8>>,
 }
 
 #[cfg(test)]
@@ -299,9 +332,12 @@ mod tests {
             if let Component::Entries(e) = decode_component(&batch).unwrap() {
                 entries += e.len();
                 for entry in e {
-                    for tx in entry.transactions {
+                    for (tx, raw) in entry.transactions.iter().zip(&entry.raw) {
                         sigs.push(tx.signatures[0].to_string());
+                        // the kept bytes are exactly this transaction, nothing more or less
+                        assert_eq!(&wincode::serialize(tx).unwrap(), raw);
                     }
+                    assert_eq!(entry.transactions.len(), entry.raw.len());
                 }
             }
         }

@@ -6,7 +6,7 @@ shred-core parses Merkle shreds, puts FEC sets back together, rebuilds missing d
 
 Tested on Solana testnet captures: blocks rebuilt from shreds match the same blocks fetched with getBlock, transaction for transaction.
 
-It runs live in [shredtap](https://github.com/jkrishnad/shred-tap), which decodes the shreds reaching a testnet validator and shows them at [shreds.vyralabs.fun](https://shreds.vyralabs.fun).
+It runs live on a testnet validator in [shredtap](https://github.com/jkrishnad/shred-tap).
 
 ## Modules
 
@@ -25,7 +25,7 @@ In the order a shred goes through them.
 
 ```toml
 [dependencies]
-shred-core = { git = "https://github.com/vyralabshq/shred-core", tag = "v0.4.0" }
+shred-core = { git = "https://github.com/vyralabshq/shred-core", tag = "v0.5.0" }
 ```
 
 ### Features
@@ -36,6 +36,8 @@ shred-core = { git = "https://github.com/vyralabshq/shred-core", tag = "v0.4.0" 
 - `pcap`, the capture file reader.
 - `footer`, the Alpenglow block footer decoder. It brings in serde.
 - `live`, off by default, reads shreds straight from a network interface with libpcap. It needs libpcap to build, and root or the `cap_net_raw` and `cap_net_admin` capabilities to run.
+
+Building needs a C compiler, because Reed-Solomon and SHA-256 run on fast C and assembly code from `reed-solomon-erasure` and `sha2`.
 
 ### Read every transaction in a capture
 
@@ -50,36 +52,42 @@ use shred_core::pcap::{PacketSource, PcapReader, udp_payload};
 fn main() -> shred_core::error::Result<()> {
     let mut leaders = LeaderSchedule::default();
     leaders.read(BufReader::new(File::open("leaders.txt")?))?;
-    let mut assembler = Assembler::new().with_leaders(leaders);
+    // hand out each transaction the moment its batch decodes
+    let mut assembler = Assembler::new().with_leaders(leaders).emit_early();
 
     let mut source = PcapReader::new(BufReader::new(File::open("shreds.pcap")?))?;
     while let Some(record) = source.next_record()? {
         let Some(payload) = udp_payload(&record.frame) else { continue };
-        assembler.push(payload, record.recv_ns).into_iter().for_each(print);
+        for event in assembler.push(payload, record.recv_ns) {
+            if let Event::Tx { slot, signature, timing, .. } = event {
+                let us = timing.decoded_ns.saturating_sub(timing.first_shred_ns) / 1000;
+                println!("{slot} {signature} {us} µs after its set's first shred");
+            }
+        }
     }
-    // the input ended, close the slots still open
-    assembler.finish().into_iter().for_each(print);
     Ok(())
-}
-
-fn print(event: Event) {
-    match event {
-        Event::Tx { slot, signature, rebuilt, .. } => println!("{slot} {signature} rebuilt {rebuilt}"),
-        Event::Slot { slot, txs, end, .. } => println!("slot {slot} {} with {txs} txs", end.as_str()),
-        _ => {}
-    }
 }
 ```
 
-On a 10 second testnet capture this prints 2,394 transactions in 45 complete slots, the same as getBlock.
+On a 10 second testnet capture this prints 2,394 transactions, the same as getBlock. The time printed is how long the network took to deliver enough of the set's shreds, not time spent in shred-core.
 
-Any other source of shreds works the same way: a UDP socket, a relay or a replay. Hand each UDP payload to `push` with the time it arrived in nanoseconds. The assembler keeps no clock of its own, so a replay gives the same result every time. A slot's events come out when it closes, at its Alpenglow skip deadline, 1.45 s after its first shred with 200 ms slots, so shreds that arrive late still count.
+To read live from a network interface instead, turn on the `live` feature and swap the source:
 
-To get transactions sooner, build it with `Assembler::new().emit_early()`. Each transaction and block marker then comes out as soon as its batch decodes, and the slot still closes at its deadline. A transaction is then marked rebuilt when one of its data shreds had not arrived yet at decode.
+```rust
+let mut source = shred_core::live::LiveCapture::open("eth0")?;
+```
 
-Every `Event::Tx` carries the full `VersionedTransaction`, its signature, the index of its entry in the slot and its place among that entry's transactions.
+Any other source of shreds works the same way: a UDP socket, a relay or a replay. Hand each UDP payload to `push` with the time it arrived in nanoseconds. The assembler keeps no clock of its own, so a replay gives the same result every time.
 
-For a full program built on it, live capture, rollups and a NATS feed, see [shredtap](https://github.com/jkrishnad/shred-tap).
+Without `emit_early`, a slot's transactions come out together when it closes, at its Alpenglow skip deadline, 1.45 s after its first shred with 200 ms slots. That is slower, but each transaction's rebuilt flag is then final: it says which data shreds never arrived at all. With `emit_early` it says which had not arrived yet at decode. Either way, set and slot events come when the slot closes, and `finish` closes the slots still open when the input ends.
+
+Every `Event::Tx` carries:
+
+- `transaction`, the decoded `VersionedTransaction`
+- `raw`, its bytes exactly as the leader encoded them, to send on without encoding again
+- `signature`, `slot`, the index of its `entry` in the slot and its `position` in that entry
+- `timing`, when its set's first shred arrived, when the set had 32 shreds and when the batch decoded
+- `rebuilt`, whether any of its bytes only exist because Reed-Solomon rebuilt them
 
 ### Where shreds come from
 

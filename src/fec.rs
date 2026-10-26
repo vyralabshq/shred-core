@@ -14,11 +14,17 @@ use crate::merkle::{self, Hash, shred_root};
 use crate::shred::{Kind, Shred, layout};
 use crate::wire;
 use reed_solomon_erasure::galois_8::ReedSolomon;
+use std::sync::OnceLock;
 
 /// Agave only builds and recovers 32 data + 32 coding sets.
 pub const DATA_SHREDS: usize = 32;
 pub const CODING_SHREDS: usize = 32;
 pub const TOTAL_SHREDS: usize = DATA_SHREDS + CODING_SHREDS;
+
+/// The Reed-Solomon codec, built once and shared by every set.
+/// It remembers the math for each pattern of missing shreds, so a repeat pattern rebuilds faster.
+static CODEC: OnceLock<std::result::Result<ReedSolomon, reed_solomon_erasure::Error>> =
+    OnceLock::new();
 
 /// One FEC set as it fills up, with 64 places, data shards at 0..32 and coding at 32..64.
 pub struct FecSet {
@@ -181,10 +187,13 @@ impl FecSet {
         if !self.can_recover() {
             return Err(self.too_few());
         }
-        // built per call rather than once in a static, so nothing here can panic
-        let rs = ReedSolomon::new(DATA_SHREDS, CODING_SHREDS)?;
+        // a failed build is kept as an error, so nothing here can panic
+        let codec = CODEC
+            .get_or_init(|| ReedSolomon::new(DATA_SHREDS, CODING_SHREDS))
+            .as_ref()
+            .map_err(|e| *e)?;
         // fills every None place, coding too, since the tree needs all 64 leaves
-        rs.reconstruct(&mut self.shards)?;
+        codec.reconstruct(&mut self.shards)?;
         self.recovered = true;
         self.check_rebuilt_root()
     }
