@@ -6,7 +6,7 @@ shred-core parses Merkle shreds, puts FEC sets back together, rebuilds missing d
 
 Tested on Solana testnet captures: blocks rebuilt from shreds match the same blocks fetched with getBlock, transaction for transaction.
 
-It runs live on a testnet validator in [shredtap](https://github.com/jkrishnad/shred-tap).
+It ran live on a Solana testnet validator in [shredtap](https://github.com/jkrishnad/shred-tap) until 29 Oct 2026, and still reads recorded captures.
 
 ## Modules
 
